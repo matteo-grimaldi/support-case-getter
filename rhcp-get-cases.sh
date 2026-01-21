@@ -1,8 +1,8 @@
 #!/bin/zsh
 
 # Configuration
-ACCOUNTS_FILE="accounts.yaml"
-OFFLINE_TOKEN="${1:-}"
+ACCOUNTS_FILE="${1:-}"
+OFFLINE_TOKEN="${2:-}"
 API_ENDPOINT="https://sso.redhat.com/auth/realms/redhat-external/protocol/openid-connect/token"
 CLIENT_ID="rhsm-api"
 RESTART_MINUTES=15
@@ -17,8 +17,8 @@ BOLD=$bold_color
 NC=$reset_color
 
 # Validate input
-if [[ -z "$OFFLINE_TOKEN" ]]; then
-    echo "Usage: $0 <offline_token>"
+if [[ -z "$ACCOUNTS_FILE" ]] || [[ -z "$OFFLINE_TOKEN" ]]; then
+    echo "Usage: $0 <accounts_file> <offline_token>"
     exit 1
 fi
 
