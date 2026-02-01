@@ -1,0 +1,7 @@
+accounts:
+  - id: "1234567"
+    name: "Production Account"
+  - id: "7654321"
+    name: "Development Account"
+  - id: "9876543"
+    name: "Test Account"
