@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import List, Dict, Optional
 from dataclasses import dataclass
 
-from rich.console import Console
+from rich.console import Console, Group
 from rich.table import Table
 from rich.live import Live
 from rich.layout import Layout
@@ -196,24 +196,31 @@ class CaseMonitorTUI:
     
     def create_account_table(self, account: Account) -> Table:
         """Create a table for a single account's cases"""
+        # Count cases for title
+        case_count = len(account.cases) if account.cases else 0
+        
         table = Table(
-            title=f"[bold]{account.name}[/bold] ({account.id})",
+            title=f"[bold]{account.name}[/bold] ({account.id}) - {case_count} case(s)",
             box=box.ROUNDED,
             show_header=True,
             header_style="bold cyan",
-            border_style="cyan"
+            border_style="cyan",
+            expand=False,  # Don't expand to fill space
+            show_lines=False  # Don't show lines between rows for better performance
         )
         
-        table.add_column("Case #", style="cyan", no_wrap=True)
-        table.add_column("Summary", style="white", max_width=50)
-        table.add_column("Severity", justify="center", no_wrap=True)
-        table.add_column("Status", justify="center", no_wrap=True)
-        table.add_column("Product", style="white", max_width=20)
-        table.add_column("Modified", style="dim", no_wrap=True)
+        table.add_column("Case #", style="cyan", no_wrap=True, width=10)
+        table.add_column("Summary", style="white", no_wrap=True, width=100, overflow="crop")
+        table.add_column("Severity", justify="center", no_wrap=True, width=8)
+        table.add_column("Status", no_wrap=True, width=20)
+        table.add_column("Product", style="white", no_wrap=True, width=35, overflow="crop")
+        table.add_column("Modified", style="dim", no_wrap=True, width=19)
         
-        if not account.cases:
+        # Check if cases is None or empty list
+        if not account.cases or len(account.cases) == 0:
             table.add_row("", "[dim]No active cases[/dim]", "", "", "", "")
         else:
+            # Add ALL cases - no filtering
             for case in account.cases:
                 # Color code status
                 if case.status == "Waiting on Red Hat":
@@ -231,11 +238,11 @@ class CaseMonitorTUI:
                 
                 table.add_row(
                     f"[link={case.case_url}]{case.case_number}[/link]",
-                    case.summary,
+                    case.summary or "",
                     f"[{severity_style}]{case.severity}[/{severity_style}]",
                     f"[{status_style}]{case.status}[/{status_style}]",
-                    case.product,
-                    case.last_modified
+                    case.product or "",
+                    case.last_modified or ""
                 )
         
         return table
@@ -262,11 +269,11 @@ class CaseMonitorTUI:
         """Create the main layout"""
         layout = Layout()
         
-        # Create vertical layout
+        # Create vertical layout with fixed sizes for header/summary
         layout.split_column(
             Layout(name="header", size=5),
             Layout(name="summary", size=3),
-            Layout(name="body")
+            Layout(name="body", ratio=1)  # Body gets remaining space
         )
         
         # Add header
@@ -277,15 +284,14 @@ class CaseMonitorTUI:
         
         # Add account tables
         if self.accounts:
-            body_layout = Layout()
-            body_layout.split_column(
-                *[Layout(name=f"account_{i}") for i in range(len(self.accounts))]
-            )
+            # Create a simple group of tables instead of nested layouts
+            tables = []
+            for account in self.accounts:
+                tables.append(self.create_account_table(account))
+                # Add spacing between tables
+                tables.append(Text(""))
             
-            for i, account in enumerate(self.accounts):
-                body_layout[f"account_{i}"].update(self.create_account_table(account))
-            
-            layout["body"].update(body_layout)
+            layout["body"].update(Group(*tables))
         
         return layout
     
