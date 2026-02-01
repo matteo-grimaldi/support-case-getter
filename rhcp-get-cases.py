@@ -45,7 +45,7 @@ class Account:
     """Represents a Red Hat account"""
     id: str
     name: str
-    cases: List[Case] = None
+    cases: list[Case] | None = None 
     
     def __post_init__(self):
         if self.cases is None:
@@ -249,9 +249,11 @@ class CaseMonitorTUI:
     
     def create_summary_panel(self) -> Panel:
         """Create a summary statistics panel"""
-        total_cases = sum(len(acc.cases) for acc in self.accounts)
+        # Use (acc.cases or []) to ensure len() always receives a list
+        total_cases = sum(len(acc.cases or []) for acc in self.accounts)
+        
         waiting_on_rh = sum(
-            len([c for c in acc.cases if c.status == "Waiting on Red Hat"]) 
+            len([c for c in (acc.cases or []) if c.status == "Waiting on Red Hat"]) 
             for acc in self.accounts
         )
         waiting_on_customer = total_cases - waiting_on_rh
