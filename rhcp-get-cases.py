@@ -23,6 +23,7 @@ from rich.panel import Panel
 from rich.text import Text
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich import box
+from datetime import datetime, timezone, timedelta
 import yaml
 import requests
 
@@ -35,6 +36,7 @@ class Case:
     severity: str
     status: str
     product: str
+    created: str
     last_modified: str
     
     @property
@@ -128,6 +130,7 @@ class RedHatAPI:
                 severity=case_data.get("severity", ""),
                 status=case_data.get("status", ""),
                 product=case_data.get("product", ""),
+                created=case_data.get("createdDate", ""),
                 last_modified=case_data.get("lastModifiedDate", "")
             ))
         
@@ -252,7 +255,8 @@ class CaseMonitorTUI:
         table.add_column("Severity", justify="center", no_wrap=True, width=8)
         table.add_column("Status", no_wrap=True, width=20)
         table.add_column("Product", style="white", no_wrap=True, width=35, overflow="crop")
-        table.add_column("Modified", style="dim", no_wrap=True, width=19)
+        table.add_column("Created", no_wrap=True, width=10)
+        table.add_column("Modified", no_wrap=True, width=16)
         
         # Check if cases is None or empty list
         if not account.cases or len(account.cases) == 0:
@@ -268,11 +272,26 @@ class CaseMonitorTUI:
                 
                 # Color code severity
                 severity_style = {
-                    "Urgent": "bold red",
-                    "High": "red",
-                    "Normal": "yellow",
-                    "Low": "green"
+                    "1 (Urgent)": "bold red",
+                    "2 (High)": "red",
+                    "3 (Normal)": "yellow",
+                    "4 (Low)": "green"
                 }.get(case.severity, "white")
+
+                # Color code creation date, format "2026-02-02T11:01:33.271Z"
+                # 1. Strip whitespace and parse the ISO format
+                # .replace('Z', '+00:00') ensures compatibility with older Python versions
+                dt_object = datetime.fromisoformat(case.created.strip().replace('Z', '+00:00'))
+
+                # 2. Get the current time in UTC
+                now = datetime.now(timezone.utc)
+
+                # 3. Create the if condition
+                creation_style = "white"
+                if now - dt_object > timedelta(weeks=1):
+                    creation_style = "yellow"
+                if now - dt_object > timedelta(weeks=4):
+                    creation_style = "red"
                 
                 table.add_row(
                     f"[link={case.case_url}]{case.case_number}[/link]",
@@ -280,7 +299,8 @@ class CaseMonitorTUI:
                     f"[{severity_style}]{case.severity}[/{severity_style}]",
                     f"[{status_style}]{case.status}[/{status_style}]",
                     case.product or "",
-                    case.last_modified or ""
+                    f"[{creation_style}]{case.created[:10]}[/{creation_style}]",
+                    case.last_modified[:16] or ""
                 )
         
         return table
