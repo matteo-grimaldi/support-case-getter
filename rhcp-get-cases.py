@@ -6,14 +6,10 @@ A terminal user interface for monitoring Red Hat support cases
 
 import sys
 import time
-import json
-import subprocess
 import threading
-import select
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import List, Dict, Optional
-from dataclasses import dataclass
+from typing import List, Optional
 
 from rich.console import Console, Group
 from rich.table import Table
@@ -21,120 +17,9 @@ from rich.live import Live
 from rich.layout import Layout
 from rich.panel import Panel
 from rich.text import Text
-from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich import box
-from datetime import datetime, timezone, timedelta
-import yaml
-import requests
 
-
-@dataclass
-class Case:
-    """Represents a Red Hat support case"""
-    case_number: str
-    summary: str
-    severity: str
-    status: str
-    product: str
-    created: str
-    last_modified: str
-    
-    @property
-    def case_url(self) -> str:
-        return f"https://access.redhat.com/support/cases/#/case/{self.case_number}"
-
-
-@dataclass
-class Account:
-    """Represents a Red Hat account"""
-    id: str
-    name: str
-    cases: list[Case] | None = None 
-    
-    def __post_init__(self):
-        if self.cases is None:
-            self.cases = []
-
-
-class RedHatAPI:
-    """Handles Red Hat API interactions"""
-    
-    TOKEN_ENDPOINT = "https://sso.redhat.com/auth/realms/redhat-external/protocol/openid-connect/token"
-    CASES_ENDPOINT = "https://api.access.redhat.com/support/v1/cases/filter"
-    CLIENT_ID = "rhsm-api"
-    
-    def __init__(self, offline_token: str):
-        self.offline_token = offline_token
-        self.access_token: Optional[str] = None
-        self.token_expiry: Optional[datetime] = None
-    
-    def get_access_token(self) -> str:
-        """Obtain or refresh the access token"""
-        if self.access_token and self.token_expiry and datetime.now() < self.token_expiry:
-            return self.access_token
-        
-        response = requests.post(
-            self.TOKEN_ENDPOINT,
-            data={
-                "grant_type": "refresh_token",
-                "refresh_token": self.offline_token,
-                "client_id": self.CLIENT_ID
-            }
-        )
-        
-        if response.status_code != 200:
-            raise Exception(f"Failed to obtain access token: {response.text}")
-        
-        data = response.json()
-        self.access_token = data.get("access_token")
-        
-        if not self.access_token:
-            raise Exception("No access token in response")
-        
-        # Token typically expires in 5 minutes, refresh before that
-        expires_in = data.get("expires_in", 300)
-        self.token_expiry = datetime.now()
-        
-        return self.access_token
-    
-    def fetch_cases(self, account_number: str) -> List[Case]:
-        """Fetch cases for a specific account"""
-        token = self.get_access_token()
-        
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json"
-        }
-        
-        payload = {
-            "accountNumber": account_number,
-            "statuses": ["Waiting on Customer", "Waiting on Red Hat"]
-        }
-        
-        response = requests.post(
-            self.CASES_ENDPOINT,
-            headers=headers,
-            json=payload
-        )
-        
-        if response.status_code != 200:
-            raise Exception(f"Failed to fetch cases: {response.text}")
-        
-        data = response.json()
-        cases = []
-        
-        for case_data in data.get("cases", []):
-            cases.append(Case(
-                case_number=case_data.get("caseNumber", ""),
-                summary=case_data.get("summary", "")[:100],
-                severity=case_data.get("severity", ""),
-                status=case_data.get("status", ""),
-                product=case_data.get("product", ""),
-                created=case_data.get("createdDate", ""),
-                last_modified=case_data.get("lastModifiedDate", "")
-            ))
-        
-        return cases
+from redhat_api import Case, Account, RedHatAPI, load_accounts
 
 
 class CaseMonitorTUI:
@@ -188,20 +73,7 @@ class CaseMonitorTUI:
     
     def load_accounts(self) -> List[Account]:
         """Load accounts from YAML file"""
-        if not self.accounts_file.exists():
-            raise FileNotFoundError(f"Accounts file not found: {self.accounts_file}")
-        
-        with open(self.accounts_file, 'r') as f:
-            data = yaml.safe_load(f)
-        
-        accounts = []
-        for acc_data in data.get('accounts', []):
-            accounts.append(Account(
-                id=acc_data.get('id', ''),
-                name=acc_data.get('name', '')
-            ))
-        
-        return accounts
+        return load_accounts(str(self.accounts_file))
     
     def fetch_all_cases(self):
         """Fetch cases for all accounts"""
