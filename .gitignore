@@ -2,3 +2,4 @@
 
 *.TODO
 CLAUDE.md
+__pycache__/
