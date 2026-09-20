@@ -102,10 +102,14 @@ class CaseMonitorTUI:
         next_update = self.refresh_seconds - (int(time.time()) % self.refresh_seconds)
         header_text.append(f" | Next refresh in: {next_update}s", style="dim")
         
-        if self.error_message:
-            header_text.append(f"\n⚠ {self.error_message}", style="bold red")
-        
         return Panel(header_text, box=box.ROUNDED, style="cyan")
+
+    def create_error_panel(self) -> Panel:
+        """Create a dedicated error panel so long messages don't get clipped."""
+        error_text = Text()
+        error_text.append("⚠ API Error\n", style="bold red")
+        error_text.append(self.error_message or "", style="red")
+        return Panel(error_text, box=box.ROUNDED, border_style="red")
     
     def create_account_table(self, account: Account) -> Table:
         """Create a table for a single account's cases"""
@@ -136,17 +140,21 @@ class CaseMonitorTUI:
         else:
             # Add ALL cases - no filtering
             for case in account.cases:
-                # Color code status
-                if case.status == "Waiting on Red Hat":
+                # Color code status — red for RH-side work, yellow for customer action
+                status_lower = (case.status or "").lower()
+                if "customer" in status_lower:
+                    status_style = "bold yellow"
+                elif "engineering" in status_lower or "collab" in status_lower or "progress" in status_lower:
                     status_style = "bold red"
                 else:
-                    status_style = "bold yellow"
+                    status_style = "bold white"
                 
-                # Color code severity
+                # Color code severity (handles both old "Normal" and new "Medium")
                 severity_style = {
                     "1 (Urgent)": "bold red",
                     "2 (High)": "red",
                     "3 (Normal)": "yellow",
+                    "3 (Medium)": "yellow",
                     "4 (Low)": "green"
                 }.get(case.severity, "white")
 
@@ -182,11 +190,14 @@ class CaseMonitorTUI:
         # Use (acc.cases or []) to ensure len() always receives a list
         total_cases = sum(len(acc.cases or []) for acc in self.accounts)
         
-        waiting_on_rh = sum(
-            len([c for c in (acc.cases or []) if c.status == "Waiting on Red Hat"]) 
+        def _is_customer_waiting(status: str) -> bool:
+            return "customer" in (status or "").lower()
+
+        waiting_on_customer = sum(
+            len([c for c in (acc.cases or []) if _is_customer_waiting(c.status)])
             for acc in self.accounts
         )
-        waiting_on_customer = total_cases - waiting_on_rh
+        waiting_on_rh = total_cases - waiting_on_customer
         
         summary_text = Text()
         summary_text.append(f"Total Cases: {total_cases}", style="bold white")
@@ -217,6 +228,7 @@ class CaseMonitorTUI:
         layout.split_column(
             Layout(name="header", size=5),
             Layout(name="summary", size=3),
+            Layout(name="error", size=6 if self.error_message else 1),
             Layout(name="body", ratio=1),  # Body gets remaining space
             Layout(name="footer", size=3)
         )
@@ -226,6 +238,12 @@ class CaseMonitorTUI:
         
         # Add summary
         layout["summary"].update(self.create_summary_panel())
+
+        # Show errors in a dedicated panel to prevent clipping in header
+        if self.error_message:
+            layout["error"].update(self.create_error_panel())
+        else:
+            layout["error"].update(Text(""))
         
         # Add footer
         layout["footer"].update(self.create_footer())

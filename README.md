@@ -217,7 +217,7 @@ Offline Token → SSO Endpoint → Access Token (cached) → API Call → Case D
 ### API Endpoints
 
 - **Token endpoint**: `https://sso.redhat.com/auth/realms/redhat-external/protocol/openid-connect/token`
-- **Cases filter endpoint**: `https://api.access.redhat.com/support/v1/cases/filter`
+- **Cases filter endpoint (v3)**: `https://api.access.redhat.com/support/v3/cases/filter`
 
 ### Case Filtering
 
@@ -225,10 +225,14 @@ The application filters cases using the following payload:
 
 ```json
 {
-  "accountNumber": "ACCOUNT_NUMBER",
-  "statuses": ["Waiting on Customer", "Waiting on Red Hat"]
+  "accountNumbers": ["ACCOUNT_NUMBER"],
+  "statuses": ["Waiting on Customer", "Waiting on Red Hat"],
+  "maxResults": 200,
+  "offset": 0
 }
 ```
+
+**Note**: The v3 API accepts `accountNumbers` as an array (replacing the deprecated v1 `accountNumber` string field) and returns a `totalCount` alongside the `cases` array. The Python client automatically pages through results (200 per request) using `offset`/`totalCount` until all matching cases have been retrieved.
 
 ## Output Format
 
@@ -285,14 +289,14 @@ Last Update: 2026-02-01 14:30:45 | Next refresh in: 234s
 curl -X POST \
   -H "Authorization: Bearer $ACCESS_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"accountNumber": "123456", "statuses": ["Waiting on Customer"]}' \
-  https://api.access.redhat.com/support/v1/cases/filter
+  -d '{"accountNumbers": ["123456"], "statuses": ["Waiting on Customer"], "maxResults": 200}' \
+  https://api.access.redhat.com/support/v3/cases/filter
 ```
 
 **Get specific case:**
 ```bash
 curl -H "Authorization: Bearer $ACCESS_TOKEN" \
-  https://api.access.redhat.com/support/v1/cases/{case_number}
+  https://api.access.redhat.com/support/v3/cases/{case_number}
 ```
 
 ### Case Status Values
@@ -473,7 +477,7 @@ def check_keyboard_input(self):
 Modify the API payload:
 ```python
 payload = {
-    "accountNumber": account_number,
+    "accountNumbers": [account_number],
     "statuses": ["Waiting on Customer", "Waiting on Red Hat"],
     "severity": "High"  # Add severity filter
 }
@@ -526,7 +530,12 @@ This tool is not officially supported by Red Hat, but you can:
 
 ## Changelog
 
-### Version 1.2 (Current)
+### Version 1.3 (Current)
+- Migrated Cases Filter API usage from the deprecated `v1` endpoint to `v3` (`https://api.access.redhat.com/support/v3/cases/filter`)
+- Request payload now sends `accountNumbers` as an array instead of the deprecated singular `accountNumber`
+- Added automatic pagination (`maxResults`/`offset`/`totalCount`) so accounts with more than 200 open cases are fully retrieved
+
+### Version 1.2
 - Added keyboard shortcut support (press 'Q' to quit)
 - Added footer bar with shortcuts display
 - Improved user experience with graceful shutdown

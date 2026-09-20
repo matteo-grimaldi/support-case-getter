@@ -57,7 +57,7 @@ while true; do
         curl -s -X POST \
                 -H "Authorization: Bearer $ACCESS_TOKEN" \
                 -H "Content-Type: application/json" \
-                -d @- "https://api.access.redhat.com/support/v1/cases/filter" <<EOF | jq -r --arg b "$BOLD" --arg c "$CYAN" --arg r "$RED" --arg nc "$NC" '
+                -d @- "https://api.access.redhat.com/support/v3/cases/filter" <<EOF | jq -r --arg b "$BOLD" --arg c "$CYAN" --arg r "$RED" --arg nc "$NC" '
                 .cases | map({
                     case: ("https://access.redhat.com/support/cases/#/case/" + .caseNumber), 
                     status: .status, 
@@ -71,13 +71,14 @@ while true; do
                     .case, 
                     .summary[:100],
                     .severity,
-                    (if .status == "Waiting on Red Hat" then ($r + .status + $nc) else ($c + .status + $nc) end), 
+                    (if (.status | test("Customer")) then ($c + .status + $nc) else ($r + .status + $nc) end), 
                     .product,
                     .lastModifiedAt
                     ]) | @tsv' | column -t -s $'\t'
                 {
-                "accountNumber": "$ACC_NUM",
-                "statuses": ["Waiting on Customer", "Waiting on Red Hat"]
+                "accountNumbers": ["$ACC_NUM"],
+                "statuses": ["In Progress", "Waiting on Customer Action Required", "Waiting on Customer Solution Delivered"],
+                "maxResults": 200
                 }
 EOF
         echo -e "\n"
