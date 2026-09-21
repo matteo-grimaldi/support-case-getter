@@ -77,7 +77,7 @@ while true; do
                     ]) | @tsv' | column -t -s $'\t'
                 {
                 "accountNumbers": ["$ACC_NUM"],
-                "statuses": ["In Progress", "Waiting on Customer Action Required", "Waiting on Customer Solution Delivered"],
+                "statuses": ["In Progress", "Waiting on Customer Action Required", "Waiting on Customer Solution Delivered", "Waiting on Engineering", "Waiting on Collab"],
                 "maxResults": 200
                 }
 EOF

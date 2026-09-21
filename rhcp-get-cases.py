@@ -34,6 +34,7 @@ class CaseMonitorTUI:
         self.last_update: Optional[datetime] = None
         self.running = True
         self.error_message: Optional[str] = None
+        self.warning_message: Optional[str] = None
         self.key_pressed = None
         
     def keyboard_listener(self):
@@ -78,13 +79,19 @@ class CaseMonitorTUI:
     def fetch_all_cases(self):
         """Fetch cases for all accounts"""
         self.error_message = None
+        self.warning_message = None
         try:
+            warnings: list[str] = []
             for account in self.accounts:
                 try:
                     account.cases = self.api.fetch_cases(account.id)
+                    if self.api.last_fetch_warning:
+                        warnings.append(f"{account.name}: {self.api.last_fetch_warning}")
                 except Exception as e:
                     self.error_message = f"Error fetching cases for {account.name}: {str(e)}"
                     account.cases = []
+            if warnings:
+                self.warning_message = " | ".join(warnings)
             
             self.last_update = datetime.now()
         except Exception as e:
@@ -105,11 +112,17 @@ class CaseMonitorTUI:
         return Panel(header_text, box=box.ROUNDED, style="cyan")
 
     def create_error_panel(self) -> Panel:
-        """Create a dedicated error panel so long messages don't get clipped."""
-        error_text = Text()
-        error_text.append("⚠ API Error\n", style="bold red")
-        error_text.append(self.error_message or "", style="red")
-        return Panel(error_text, box=box.ROUNDED, border_style="red")
+        """Create a dedicated alert panel so long messages don't get clipped."""
+        if self.error_message:
+            alert_text = Text()
+            alert_text.append("⚠ API Error\n", style="bold red")
+            alert_text.append(self.error_message, style="red")
+            return Panel(alert_text, box=box.ROUNDED, border_style="red")
+
+        alert_text = Text()
+        alert_text.append("⚠ API Warning\n", style="bold yellow")
+        alert_text.append(self.warning_message or "", style="yellow")
+        return Panel(alert_text, box=box.ROUNDED, border_style="yellow")
     
     def create_account_table(self, account: Account) -> Table:
         """Create a table for a single account's cases"""
@@ -127,9 +140,9 @@ class CaseMonitorTUI:
         )
         
         table.add_column("Case #", style="cyan", no_wrap=True, width=10)
-        table.add_column("Summary", style="white", no_wrap=True, width=100, overflow="crop")
+        table.add_column("Summary", style="white", no_wrap=True, width=70, overflow="crop")
         table.add_column("Severity", justify="center", no_wrap=True, width=8)
-        table.add_column("Status", no_wrap=True, width=20)
+        table.add_column("Status", no_wrap=True, width=40)
         table.add_column("Product", style="white", no_wrap=True, width=35, overflow="crop")
         table.add_column("Created", no_wrap=True, width=10)
         table.add_column("Modified", no_wrap=True, width=16)
@@ -228,7 +241,7 @@ class CaseMonitorTUI:
         layout.split_column(
             Layout(name="header", size=5),
             Layout(name="summary", size=3),
-            Layout(name="error", size=6 if self.error_message else 1),
+            Layout(name="error", size=6 if (self.error_message or self.warning_message) else 1),
             Layout(name="body", ratio=1),  # Body gets remaining space
             Layout(name="footer", size=3)
         )
@@ -239,8 +252,8 @@ class CaseMonitorTUI:
         # Add summary
         layout["summary"].update(self.create_summary_panel())
 
-        # Show errors in a dedicated panel to prevent clipping in header
-        if self.error_message:
+        # Show alerts in a dedicated panel to prevent clipping in header
+        if self.error_message or self.warning_message:
             layout["error"].update(self.create_error_panel())
         else:
             layout["error"].update(Text(""))

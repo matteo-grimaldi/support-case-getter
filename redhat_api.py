@@ -50,18 +50,29 @@ class RedHatAPI:
     """Handles Red Hat API interactions"""
 
     TOKEN_ENDPOINT = "https://sso.redhat.com/auth/realms/redhat-external/protocol/openid-connect/token"
+    GRAPHQL_ENDPOINT = "https://graphql.redhat.com"
     CASES_FILTER_ENDPOINT = "https://api.access.redhat.com/support/v3/cases/filter"
     CASES_GET_ENDPOINT = "https://api.access.redhat.com/support/v3/cases"
     SEARCH_ENDPOINT = "https://api.access.redhat.com/support/search/cases"
     CLIENT_ID = "rhsm-api"
     MAX_RESULTS_PER_PAGE = 200
     MAX_CONCURRENT_REQUESTS = 15
+    GRAPHQL_ACTIVE_STATUSES = [
+        "In Progress",
+        "Waiting on Customer Action Required",
+        "Waiting on Customer Solution Delivered",
+        "Waiting on Engineering",
+        "Waiting on Collab",
+    ]
+    GRAPHQL_CLIENT_NAME = "support-case-getter"
+    GRAPHQL_CLIENT_VERSION = "1.0.0"
 
     def __init__(self, offline_token: str):
         self.offline_token = offline_token
         self.access_token: Optional[str] = None
         self.token_expiry: Optional[datetime] = None
         self._session = requests.Session()
+        self.last_fetch_warning: Optional[str] = None
 
     def get_access_token(self) -> str:
         """Obtain or refresh the access token"""
@@ -94,6 +105,114 @@ class RedHatAPI:
     def _auth_headers(self) -> dict:
         token = self.get_access_token()
         return {"Authorization": f"Bearer {token}"}
+
+    def _graphql_headers(self) -> dict:
+        """Headers required by graphql.redhat.com."""
+        return {
+            **self._auth_headers(),
+            "Content-Type": "application/json",
+            "apollographql-client-name": self.GRAPHQL_CLIENT_NAME,
+            "apollographql-client-version": self.GRAPHQL_CLIENT_VERSION,
+        }
+
+    def _fetch_cases_graphql(self, account_number: str) -> List[Case]:
+        """Fetch cases via GraphQL with server-side filtering and pagination."""
+        query = """
+query GetCasesByFilters($where: RedHatSupportCase_Filter, $first: Int = 200, $after: String) {
+  redhat_support_uiapi {
+    query {
+      RedHatSupportCase(
+        where: $where
+        first: $first
+        after: $after
+        orderBy: { LastModifiedDate: { order: DESC } }
+      ) {
+        edges {
+          cursor
+          node {
+            CaseNumber__c { value }
+            Subject { value }
+            Status { value }
+            Priority { value }
+            CreatedDate { value }
+            LastModifiedDate { value }
+            Product {
+              Name { value }
+            }
+          }
+        }
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+      }
+    }
+  }
+}
+"""
+        where = {
+            "and": [
+                {"RedHatSupportAccount": {"AccountNumber": {"eq": account_number}}},
+                {"Status": {"in": self.GRAPHQL_ACTIVE_STATUSES}},
+                {"RedHatSupportRecordType": {"Name": {"eq": "Technical Support"}}},
+                {"AccessRestrictions__c": {"eq": "None"}},
+            ]
+        }
+
+        cases: List[Case] = []
+        after: Optional[str] = None
+        while True:
+            payload = {
+                "query": query,
+                "variables": {
+                    "where": where,
+                    "first": self.MAX_RESULTS_PER_PAGE,
+                    "after": after,
+                },
+            }
+            resp = self._session.post(
+                self.GRAPHQL_ENDPOINT,
+                headers=self._graphql_headers(),
+                json=payload,
+                timeout=60,
+            )
+            if resp.status_code != 200:
+                raise Exception(f"GraphQL query failed: HTTP {resp.status_code}")
+
+            data = resp.json()
+            if data.get("errors"):
+                raise Exception(f"GraphQL errors: {data['errors'][0].get('message', 'unknown error')}")
+
+            root = (
+                data.get("data", {})
+                .get("redhat_support_uiapi", {})
+                .get("query", {})
+                .get("RedHatSupportCase", {})
+            )
+            edges = root.get("edges", [])
+            for edge in edges:
+                node = edge.get("node", {})
+                product = (
+                    node.get("Product", {})
+                    .get("Name", {})
+                    .get("value", "")
+                )
+                cases.append(Case(
+                    case_number=node.get("CaseNumber__c", {}).get("value", ""),
+                    summary=(node.get("Subject", {}).get("value") or "")[:100],
+                    severity=node.get("Priority", {}).get("value", ""),
+                    status=node.get("Status", {}).get("value", ""),
+                    product=product or "",
+                    created=node.get("CreatedDate", {}).get("value", ""),
+                    last_modified=node.get("LastModifiedDate", {}).get("value", ""),
+                ))
+
+            page_info = root.get("pageInfo", {})
+            if not page_info.get("hasNextPage"):
+                break
+            after = page_info.get("endCursor")
+
+        return cases
 
     def _get_open_case_count(self, account_number: str) -> int:
         """Return open-case count from v3 filter (or -1 if unavailable)."""
@@ -168,9 +287,8 @@ class RedHatAPI:
             last_modified=d.get("lastModifiedDate", ""),
         )
 
-    def fetch_cases(self, account_number: str) -> List[Case]:
-        """Fetch open cases using search + per-case GET fallback."""
-        target = self._get_open_case_count(account_number)
+    def _fetch_cases_rest_fallback(self, account_number: str, target: int) -> List[Case]:
+        """Fallback: search API for numbers + per-case GET requests."""
         if target == 0:
             return []
 
@@ -193,6 +311,30 @@ class RedHatAPI:
 
         cases.sort(key=lambda c: c.last_modified or "", reverse=True)
         return cases
+
+    def fetch_cases(self, account_number: str) -> List[Case]:
+        """Fetch open cases (GraphQL primary, REST fallback)."""
+        self.last_fetch_warning = None
+        try:
+            graphql_cases = self._fetch_cases_graphql(account_number)
+            if graphql_cases:
+                return graphql_cases
+
+            # If GraphQL returns nothing but v3 count says there are open cases, fallback.
+            target = self._get_open_case_count(account_number)
+            if target > 0:
+                self.last_fetch_warning = (
+                    "GraphQL returned no cases while REST reported open cases; "
+                    "using REST fallback for this account."
+                )
+                return self._fetch_cases_rest_fallback(account_number, target)
+            return []
+        except Exception as exc:
+            target = self._get_open_case_count(account_number)
+            self.last_fetch_warning = (
+                f"GraphQL failed ({str(exc)}); using REST fallback for this account."
+            )
+            return self._fetch_cases_rest_fallback(account_number, target)
 
 
 def load_accounts(yaml_path: str) -> List[Account]:

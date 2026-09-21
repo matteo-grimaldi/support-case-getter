@@ -217,22 +217,37 @@ Offline Token → SSO Endpoint → Access Token (cached) → API Call → Case D
 ### API Endpoints
 
 - **Token endpoint**: `https://sso.redhat.com/auth/realms/redhat-external/protocol/openid-connect/token`
-- **Cases filter endpoint (v3)**: `https://api.access.redhat.com/support/v3/cases/filter`
+- **GraphQL endpoint (primary)**: `https://graphql.redhat.com`
+- **Cases filter endpoint (v3, fallback/count)**: `https://api.access.redhat.com/support/v3/cases/filter`
+- **Case lookup endpoint (v3, fallback/details)**: `https://api.access.redhat.com/support/v3/cases/{caseNumber}`
+- **Search endpoint (fallback/discovery)**: `https://api.access.redhat.com/support/search/cases`
 
 ### Case Filtering
 
-The application filters cases using the following payload:
+The application now uses GraphQL server-side filtering first:
 
 ```json
 {
-  "accountNumbers": ["ACCOUNT_NUMBER"],
-  "statuses": ["Waiting on Customer", "Waiting on Red Hat"],
-  "maxResults": 200,
-  "offset": 0
+  "where": {
+    "and": [
+      { "RedHatSupportAccount": { "AccountNumber": { "eq": "ACCOUNT_NUMBER" } } },
+      { "Status": { "in": [
+        "In Progress",
+        "Waiting on Customer Action Required",
+        "Waiting on Customer Solution Delivered",
+        "Waiting on Engineering",
+        "Waiting on Collab"
+      ] } }
+    ]
+  },
+  "first": 200,
+  "after": null
 }
 ```
 
-**Note**: The v3 API accepts `accountNumbers` as an array (replacing the deprecated v1 `accountNumber` string field) and returns a `totalCount` alongside the `cases` array. The Python client automatically pages through results (200 per request) using `offset`/`totalCount` until all matching cases have been retrieved.
+**Note**: GraphQL uses cursor-based pagination (`first`/`after`) and returns values in nested wrappers (for example `Status { value }`, `CaseNumber__c { value }`). The app unwraps these values before rendering.
+
+When GraphQL is unavailable or returns no data while open-case counts indicate active cases, the Python client automatically falls back to the REST strategy (`v3/cases/filter` count + search + per-case lookup).
 
 ## Output Format
 
@@ -281,31 +296,39 @@ Last Update: 2026-02-01 14:30:45 | Next refresh in: 234s
 - **Documentation**: [Customer Portal Integration Guide](https://docs.redhat.com/en/documentation/red_hat_customer_portal/1/html-single/customer_portal_integration_guide)
 - **API Catalog**: [Red Hat API Catalog - Case Management](https://developers.redhat.com/api-catalog/api/case-management)
 - **Getting Started**: [Getting Started with Red Hat APIs](https://access.redhat.com/articles/3626371)
+- **GraphQL Support Case Guide**: [Using Red Hat GraphQL API for Support Case Management](https://access.redhat.com/articles/7146073)
 
 ### Common API Operations
 
-**Filter cases by status:**
+**GraphQL filter query (server-side):**
+```bash
+curl --request POST \
+  --url https://graphql.redhat.com \
+  --header "Content-Type: application/json" \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  --header "apollographql-client-name: support-case-getter" \
+  --header "apollographql-client-version: 1.0.0" \
+  --data '{"query":"query GetCasesByFilters($where: RedHatSupportCase_Filter, $first: Int = 5, $after: String) { redhat_support_uiapi { query { RedHatSupportCase(where: $where, first: $first, after: $after, orderBy: { LastModifiedDate: { order: DESC } }) { edges { node { CaseNumber__c { value } Status { value } Priority { value } } } pageInfo { hasNextPage endCursor } } } } }","variables":{"first":5,"after":null,"where":{"and":[{"RedHatSupportAccount":{"AccountNumber":{"eq":"123456"}}},{"Status":{"in":["In Progress","Waiting on Customer Action Required"]}}]}}}'
+```
+
+**REST filter fallback (known API issue: may return non-zero `totalCount` with empty `cases`):**
 ```bash
 curl -X POST \
   -H "Authorization: Bearer $ACCESS_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"accountNumbers": ["123456"], "statuses": ["Waiting on Customer"], "maxResults": 200}' \
+  -d '{"accountNumbers": ["123456"], "statuses": ["In Progress"], "maxResults": 200, "offset": 0}' \
   https://api.access.redhat.com/support/v3/cases/filter
-```
-
-**Get specific case:**
-```bash
-curl -H "Authorization: Bearer $ACCESS_TOKEN" \
-  https://api.access.redhat.com/support/v3/cases/{case_number}
 ```
 
 ### Case Status Values
 
 Common Red Hat support case statuses:
-- `Waiting on Customer` - Red Hat needs information from you
-- `Waiting on Red Hat` - Case is being worked on by Red Hat
+- `In Progress` - Case is actively being worked
+- `Waiting on Customer Action Required` - Red Hat needs information/action from you
+- `Waiting on Customer Solution Delivered` - Solution provided, waiting on customer confirmation
+- `Waiting on Engineering` - Escalated to engineering
+- `Waiting on Collab` - In collaboration workflow
 - `Closed` - Case has been resolved
-- `Closed with Notification` - Case closed with automated notification
 
 ## Security Best Practices
 
@@ -530,7 +553,14 @@ This tool is not officially supported by Red Hat, but you can:
 
 ## Changelog
 
-### Version 1.3 (Current)
+### Version 1.4 (Current)
+- Introduced GraphQL-first case retrieval via `https://graphql.redhat.com`
+- Added required Apollo headers (`apollographql-client-name`, `apollographql-client-version`) for GraphQL requests
+- Implemented server-side GraphQL status filtering and cursor-based pagination
+- Kept REST fallback path for resiliency when GraphQL is unavailable
+- Updated active status filters to include `Waiting on Engineering` and `Waiting on Collab`
+
+### Version 1.3
 - Migrated Cases Filter API usage from the deprecated `v1` endpoint to `v3` (`https://api.access.redhat.com/support/v3/cases/filter`)
 - Request payload now sends `accountNumbers` as an array instead of the deprecated singular `accountNumber`
 - Added automatic pagination (`maxResults`/`offset`/`totalCount`) so accounts with more than 200 open cases are fully retrieved
